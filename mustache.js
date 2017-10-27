@@ -78,7 +78,7 @@
   var spaceRe = /\s+/;
   var equalsRe = /\s*=/;
   var curlyRe = /\s*\}/;
-  var tagRe = /#|\^|\/|>|\{|&|=|!/;
+  var tagRe = /#|@|\^|\/|>|\{|&|=|!/;
 
   /**
    * Breaks up the given `template` string into a tree of tokens. If the `tags`
@@ -200,7 +200,7 @@
       token = [ type, value, start, scanner.pos ];
       tokens.push(token);
 
-      if (type === '#' || type === '^') {
+      if (type === '#' || type === '^' || type === '@') {
         sections.push(token);
       } else if (type === '/') {
         // Check section nesting.
@@ -271,6 +271,7 @@
       switch (token[0]) {
         case '#':
         case '^':
+        case '@':
           collector.push(token);
           sections.push(token);
           collector = token[4] = [];
@@ -370,7 +371,7 @@
    * Returns the value of the given name in this context, traversing
    * up the context hierarchy if the value is absent in this context's view.
    */
-  Context.prototype.lookup = function lookup (name) {
+    Context.prototype.lookup = function lookup (name, index) {
     var cache = this.cache;
 
     var value;
@@ -418,6 +419,9 @@
 
     if (isFunction(value))
       value = value.call(this.view);
+    else if (Array.isArray(value) && index !== undefined)
+      // grab item from array, with recycling
+      value = value[index % value.length];
 
     return value;
   };
@@ -476,7 +480,7 @@
    * If the template doesn't use higher-order sections, this argument may
    * be omitted.
    */
-  Writer.prototype.renderTokens = function renderTokens (tokens, context, partials, originalTemplate) {
+  Writer.prototype.renderTokens = function renderTokens (tokens, context, partials, originalTemplate, index) {
     var buffer = '';
 
     var token, symbol, value;
@@ -485,11 +489,12 @@
       token = tokens[i];
       symbol = token[0];
 
-      if (symbol === '#') value = this.renderSection(token, context, partials, originalTemplate);
-      else if (symbol === '^') value = this.renderInverted(token, context, partials, originalTemplate);
-      else if (symbol === '>') value = this.renderPartial(token, context, partials, originalTemplate);
-      else if (symbol === '&') value = this.unescapedValue(token, context);
-      else if (symbol === 'name') value = this.escapedValue(token, context);
+      if (symbol === '#') value = this.renderSection(token, context, partials, originalTemplate, index);
+      else if (symbol === '@') value = this.renderDeepSection(token, context, partials, originalTemplate, index);
+      else if (symbol === '^') value = this.renderInverted(token, context, partials, originalTemplate, index);
+      else if (symbol === '>') value = this.renderPartial(token, context, partials, originalTemplate, index);
+      else if (symbol === '&') value = this.unescapedValue(token, context, index);
+      else if (symbol === 'name') value = this.escapedValue(token, context, index);
       else if (symbol === 'text') value = this.rawValue(token);
 
       if (value !== undefined)
@@ -499,10 +504,10 @@
     return buffer;
   };
 
-  Writer.prototype.renderSection = function renderSection (token, context, partials, originalTemplate) {
+  Writer.prototype.renderSection = function renderSection (token, context, partials, originalTemplate, index) {
     var self = this;
     var buffer = '';
-    var value = context.lookup(token[1]);
+    var value = context.lookup(token[1], index);
 
     // This function is used to render an arbitrary template
     // in the current context by higher-order sections.
@@ -514,10 +519,10 @@
 
     if (isArray(value)) {
       for (var j = 0, valueLength = value.length; j < valueLength; ++j) {
-        buffer += this.renderTokens(token[4], context.push(value[j]), partials, originalTemplate);
+        buffer += this.renderTokens(token[4], context.push(value[j]), partials, originalTemplate, index);
       }
     } else if (typeof value === 'object' || typeof value === 'string' || typeof value === 'number') {
-      buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate);
+      buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate, index);
     } else if (isFunction(value)) {
       if (typeof originalTemplate !== 'string')
         throw new Error('Cannot use higher-order sections without the original template');
@@ -528,12 +533,37 @@
       if (value != null)
         buffer += value;
     } else {
-      buffer += this.renderTokens(token[4], context, partials, originalTemplate);
+      buffer += this.renderTokens(token[4], context, partials, originalTemplate, index);
     }
     return buffer;
   };
 
-  Writer.prototype.renderInverted = function renderInverted (token, context, partials, originalTemplate) {
+  Writer.prototype.renderDeepSection = function renderDeepSection (token, context, partials, originalTemplate, index) {
+    var self = this;
+    var buffer = '';
+    var value = context.lookup(token[1], index);
+
+      // This function is used to render an arbitrary template
+      // in the current context by higher-order sections.
+    function subRender (template) {
+      return self.render(template, context, partials);
+    }
+
+    if (!value) return;
+
+    if (typeof value === 'object') {
+      // Assume this is an object of arrays, and extract the longest
+      // length, which will be the number of times this section is
+      // rendered.  Items from each array in the object are recycled out
+      // to this maximum length.
+      for (var j = 0, jlen = Math.max.apply(null, Object.keys(value).map(function(k){return(value[k] instanceof Array ? value[k].length : 1)})); j < jlen; ++j) {
+        buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate, j);
+      }
+    }
+    return buffer;
+  };
+
+  Writer.prototype.renderInverted = function renderInverted (token, context, partials, originalTemplate, index) {
     var value = context.lookup(token[1]);
 
     // Use JavaScript's definition of falsy. Include empty arrays.
@@ -547,17 +577,17 @@
 
     var value = isFunction(partials) ? partials(token[1]) : partials[token[1]];
     if (value != null)
-      return this.renderTokens(this.parse(value), context, partials, value);
+      return this.renderTokens(this.parse(value), context, partials, value, index);
   };
 
-  Writer.prototype.unescapedValue = function unescapedValue (token, context) {
-    var value = context.lookup(token[1]);
+  Writer.prototype.unescapedValue = function unescapedValue (token, context, index) {
+    var value = context.lookup(token[1], index);
     if (value != null)
       return value;
   };
 
-  Writer.prototype.escapedValue = function escapedValue (token, context) {
-    var value = context.lookup(token[1]);
+  Writer.prototype.escapedValue = function escapedValue (token, context, index) {
+    var value = context.lookup(token[1], index);
     if (value != null)
       return mustache.escape(value);
   };

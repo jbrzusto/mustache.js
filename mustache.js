@@ -417,11 +417,11 @@
       cache[name] = value;
     }
 
-    if (isFunction(value))
-      value = value.call(this.view);
-    else if (Array.isArray(value) && index !== undefined)
-      // grab item from array, with recycling
-      value = value[index % value.length];
+      if (Array.isArray(value) && index !== undefined)
+        // grab item from array, with recycling
+        value = value[index % value.length];
+      if (isFunction(value))
+        value = value.call(this.view, index);
 
     return value;
   };
@@ -465,10 +465,10 @@
    * also be a function that is used to load partial templates on the fly
    * that takes a single argument: the name of the partial.
    */
-  Writer.prototype.render = function render (template, view, partials) {
+  Writer.prototype.render = function render (template, view, partials, index) {
     var tokens = this.parse(template);
     var context = (view instanceof Context) ? view : new Context(view);
-    return this.renderTokens(tokens, context, partials, template);
+    return this.renderTokens(tokens, context, partials, template, index);
   };
 
   /**
@@ -511,8 +511,8 @@
 
     // This function is used to render an arbitrary template
     // in the current context by higher-order sections.
-    function subRender (template) {
-      return self.render(template, context, partials);
+    function subRender (template, index) {
+      return self.render(template, context, partials, index);
     }
 
     if (!value) return;
@@ -528,7 +528,7 @@
         throw new Error('Cannot use higher-order sections without the original template');
 
       // Extract the portion of the original template that the section contains.
-      value = value.call(context.view, originalTemplate.slice(token[3], token[5]), subRender);
+      value = value.call(context.view, originalTemplate.slice(token[3], token[5]), subRender, index);
 
       if (value != null)
         buffer += value;
@@ -545,8 +545,8 @@
 
       // This function is used to render an arbitrary template
       // in the current context by higher-order sections.
-    function subRender (template) {
-      return self.render(template, context, partials);
+    function subRender (template, index) {
+      return self.render(template, context, partials, index);
     }
 
     if (!value) return;
@@ -572,7 +572,7 @@
       return this.renderTokens(token[4], context, partials, originalTemplate);
   };
 
-  Writer.prototype.renderPartial = function renderPartial (token, context, partials) {
+  Writer.prototype.renderPartial = function renderPartial (token, context, partials, index) {
     if (!partials) return;
 
     var value = isFunction(partials) ? partials(token[1]) : partials[token[1]];

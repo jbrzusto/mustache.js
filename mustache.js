@@ -78,7 +78,7 @@
   var spaceRe = /\s+/;
   var equalsRe = /\s*=/;
   var curlyRe = /\s*\}/;
-  var tagRe = /#|@|\^|\/|>|\{|&|=|!/;
+  var tagRe = /#|\^|\/|>|\{|&|=|!/;
 
   /**
    * Breaks up the given `template` string into a tree of tokens. If the `tags`
@@ -200,7 +200,7 @@
       token = [ type, value, start, scanner.pos ];
       tokens.push(token);
 
-      if (type === '#' || type === '^' || type === '@') {
+      if (type === '#' || type === '^') {
         sections.push(token);
       } else if (type === '/') {
         // Check section nesting.
@@ -271,7 +271,6 @@
       switch (token[0]) {
         case '#':
         case '^':
-        case '@':
           collector.push(token);
           sections.push(token);
           collector = token[4] = [];
@@ -490,7 +489,6 @@
       symbol = token[0];
 
       if (symbol === '#') value = this.renderSection(token, context, partials, originalTemplate, index);
-      else if (symbol === '@') value = this.renderDeepSection(token, context, partials, originalTemplate, index);
       else if (symbol === '^') value = this.renderInverted(token, context, partials, originalTemplate, index);
       else if (symbol === '>') value = this.renderPartial(token, context, partials, originalTemplate, index);
       else if (symbol === '&') value = this.unescapedValue(token, context, index);
@@ -521,6 +519,10 @@
       for (var j = 0, valueLength = value.length; j < valueLength; ++j) {
         buffer += this.renderTokens(token[4], context.push(value[j]), partials, originalTemplate, index);
       }
+    } else if (typeof value === 'object' && value['__transpose__']) {
+      for (var j = 0, jlen = Math.max.apply(null, Object.keys(value).map(function(k){return(value[k] instanceof Array ? value[k].length : 1)})); j < jlen; ++j) {
+        buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate, j);
+      }
     } else if (typeof value === 'object' || typeof value === 'string' || typeof value === 'number') {
       buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate, index);
     } else if (isFunction(value)) {
@@ -534,31 +536,6 @@
         buffer += value;
     } else {
       buffer += this.renderTokens(token[4], context, partials, originalTemplate, index);
-    }
-    return buffer;
-  };
-
-  Writer.prototype.renderDeepSection = function renderDeepSection (token, context, partials, originalTemplate, index) {
-    var self = this;
-    var buffer = '';
-    var value = context.lookup(token[1], index);
-
-      // This function is used to render an arbitrary template
-      // in the current context by higher-order sections.
-    function subRender (template, index) {
-      return self.render(template, context, partials, index);
-    }
-
-    if (!value) return;
-
-    if (typeof value === 'object') {
-      // Assume this is an object of arrays, and extract the longest
-      // length, which will be the number of times this section is
-      // rendered.  Items from each array in the object are recycled out
-      // to this maximum length.
-      for (var j = 0, jlen = Math.max.apply(null, Object.keys(value).map(function(k){return(value[k] instanceof Array ? value[k].length : 1)})); j < jlen; ++j) {
-        buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate, j);
-      }
     }
     return buffer;
   };
